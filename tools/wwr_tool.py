@@ -17,8 +17,12 @@ Hardcoded thresholds (Zone C2, CTE DB-HE 1):
 
 import math
 import json
+import uuid
+import time
 import ifcopenshell
 import ifcopenshell.util.element as util
+
+CARDINAL_LONG = {"N": "North", "S": "South", "E": "East", "W": "West"}
 
 # ---------------------------------------------------------------------------
 # Hardcoded thresholds – Zone C2 (Barcelona / coastal Catalonia)
@@ -149,30 +153,21 @@ def _window_wall_map(ifc_file):
 # Public tool function
 # ---------------------------------------------------------------------------
 
-def check_wwr(ifc_file_path: str) -> dict:
+def check_wwr(ifc_file_path: str):
     """
     Compute Window-to-Wall Ratio per facade orientation and check compliance.
 
-    Parameters
-    ----------
-    ifc_file_path : str
-        Absolute or relative path to the .ifc model file.
-
     Returns
     -------
-    dict – JSON-serialisable result:
-        compliant       : bool   – True if ALL facades pass
-        regulation      : str    – regulatory basis
-        facades         : dict   – per-orientation breakdown (N/S/E/W)
-            wall_area_m2    : float
-            window_area_m2  : float
-            wwr_pct         : float  (e.g. 22.9)
-            max_wwr_pct     : float  (e.g. 35.0)
-            pass            : bool
-        site            : dict   – lat, lon, true_north_deg
-        warnings        : list   – any data-quality issues found
+    tuple (element_results: list[dict], overall_result: dict)
+        element_results – one row per facade (N/S/E/W)
+        overall_result  – single summary dict with status / summary / has_elements
     """
     ifc_file = ifcopenshell.open(ifc_file_path)
+
+    # -- Extract project_id --------------------------------------------------
+    projects = ifc_file.by_type("IfcProject")
+    project_id = projects[0].GlobalId if projects else None
 
     north_offset = _true_north(ifc_file)
 
@@ -215,8 +210,9 @@ def check_wwr(ifc_file_path: str) -> dict:
         warnings.append(f"{unmatched} window(s) could not be matched to a host wall.")
 
     # -- Compute WWR and compliance ------------------------------------------
-    facades = {}
+    element_results = []
     all_pass = True
+    fail_cards = []
 
     for card in ("N", "S", "E", "W"):
         w_area  = wall_areas[card]
@@ -225,27 +221,42 @@ def check_wwr(ifc_file_path: str) -> dict:
         limit   = MAX_WWR[card]
         passed  = wwr <= limit
 
-        facades[card] = {
-            "wall_area_m2":   round(w_area, 2),
-            "window_area_m2": round(g_area, 2),
-            "wwr_pct":        round(wwr * 100, 1),
-            "max_wwr_pct":    round(limit * 100, 1),
-            "pass":           passed,
-        }
-
         if not passed:
             all_pass = False
+            fail_cards.append(card)
             warnings.append(
                 f"{card} facade exceeds limit: {wwr*100:.1f}% > {limit*100:.0f}%"
             )
 
-    return {
-        "compliant":  all_pass,
-        "regulation": REGULATION,
-        "facades":    facades,
-        "site":       site_info,
-        "warnings":   warnings,
+        element_results.append({
+            "element_id":        None,
+            "element_type":      "Facade",
+            "element_name":      card,
+            "element_name_long": CARDINAL_LONG[card],
+            "check_status":      "pass" if passed else "fail",
+            "actual_value":      f"{round(wwr * 100, 1)}%",
+            "required_value":    f"<= {round(limit * 100, 1)}%",
+            "comment":           f"wall_area_m2={round(w_area, 2)}, window_area_m2={round(g_area, 2)}",
+            "log":               None,
+        })
+
+    # -- Build overall_result ------------------------------------------------
+    n_fail = len(fail_cards)
+    if all_pass:
+        summary = f"All 4 facades comply with {REGULATION}."
+    else:
+        summary = (
+            f"{n_fail} facade(s) exceed WWR limits ({', '.join(fail_cards)}). "
+            f"Regulation: {REGULATION}."
+        )
+
+    overall_result = {
+        "status":       "pass" if all_pass else "fail",
+        "summary":      summary,
+        "has_elements":  1 if element_results else 0,
     }
+
+    return element_results, overall_result
 
 
 # ---------------------------------------------------------------------------
@@ -281,5 +292,8 @@ if __name__ == "__main__":
     import sys
 
     path = sys.argv[1] if len(sys.argv) > 1 else "../01_Duplex_Apartment.ifc"
-    result = check_wwr(path)
-    print(json.dumps(result, indent=2))
+    elements, overall = check_wwr(path)
+    print("=== overall_result ===")
+    print(json.dumps(overall, indent=2))
+    print("\n=== element_results ===")
+    print(json.dumps(elements, indent=2))

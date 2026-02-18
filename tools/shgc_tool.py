@@ -156,36 +156,54 @@ def check_shgc(ifc_file_path, default_shgc=0.70, **kwargs):
         
         total_heat_gain += contribution
             
+        # Per-window status: "warning" if SHGC missing, else "log" (pass/fail is building-level)
+        if is_missing:
+            row_status = "warning"
+        else:
+            row_status = "log"
+
         results.append({
-            "name": window.Name or "Unnamed",
-            "id": window.GlobalId,
-            "orientation": orientation,
-            "shgc": float(round(shgc, 3)),
-            "area_m2": float(round(w_area, 2)),
-            "contribution": float(round(contribution, 2)),
-            "is_missing": is_missing
+            "element_id":        window.GlobalId,
+            "element_type":      "IfcWindow",
+            "element_name":      window.Name or "Unnamed",
+            "element_name_long": None,
+            "check_status":      row_status,
+            "actual_value":      f"SHGC={round(shgc, 3)}, contribution={round(contribution, 2)} Wh",
+            "required_value":    f"q_sol_jul <= {q_sol_jul_limit} kWh/m2·month (building level)",
+            "comment":           f"orientation={orientation}, area_m2={round(w_area, 2)}",
+            "log":               "SHGC not in IFC (default 0.7)" if is_missing else None,
         })
         
     # Calculate q_sol;jul
     q_sol_jul = total_heat_gain / a_util
     passed = bool(q_sol_jul <= q_sol_jul_limit)
     
-    return {
-        "compliant": passed,
-        "q_sol_jul": float(round(q_sol_jul, 2)),
-        "limit": float(q_sol_jul_limit),
-        "results": results,
-        "a_util_m2": float(round(a_util, 2)),
-        "total_window_area_m2": float(round(total_window_area, 2)),
-        "missing_shgc_count": missing_shgc_count,
-        "total_windows": len(windows)
+    if passed:
+        summary = (
+            f"Building passes solar heat gain check. "
+            f"q_sol_jul={round(q_sol_jul, 2)} <= {q_sol_jul_limit} kWh/m2·month. "
+            f"A_util={round(a_util, 2)} m2, {len(windows)} windows checked."
+        )
+    else:
+        summary = (
+            f"Building FAILS solar heat gain check. "
+            f"q_sol_jul={round(q_sol_jul, 2)} > {q_sol_jul_limit} kWh/m2·month. "
+            f"A_util={round(a_util, 2)} m2, {len(windows)} windows checked."
+        )
+    if missing_shgc_count:
+        summary += f" {missing_shgc_count} window(s) missing SHGC (default 0.7 used)."
+
+    overall_result = {
+        "status":       "pass" if passed else "fail",
+        "summary":      summary,
+        "has_elements":  1 if results else 0,
     }
+
+    return results, overall_result
 
 def analyze_shgc(ifc_file_path):
     """
     Standard entry point for the SHGC Compliance Tool.
     Hardcodes Climate Zone C2 values and returns JSON.
     """
-    # Hardcoded values for Catalan Climate Zone C2
-    # Logic is already inside check_shgc, but we expose this clean function
     return check_shgc(ifc_file_path)

@@ -265,31 +265,51 @@ def check_room_depth(
 
         if win_head_h <= 0:
             results.append({
-                "room": long_name,
-                "room_id": space.Name or "",
-                "depth_m": round(depth, 3),
-                "window_head_height_m": 0,
-                "max_allowed_depth_m": 0,
-                "pass": False,
-                "note": "No windows found for this space",
+                "element_id":        space.GlobalId,
+                "element_type":      "IfcSpace",
+                "element_name":      space.Name or "",
+                "element_name_long": long_name,
+                "check_status":      "blocked",
+                "actual_value":      f"depth={round(depth, 3)} m",
+                "required_value":    None,
+                "comment":           "No windows found for this space",
+                "log":               None,
             })
             continue
 
         max_depth = depth_factor * win_head_h
+        passed = depth <= max_depth
         results.append({
-            "room": long_name,
-            "room_id": space.Name or "",
-            "depth_m": round(depth, 3),
-            "window_head_height_m": round(win_head_h, 3),
-            "max_allowed_depth_m": round(max_depth, 3),
-            "pass": depth <= max_depth,
+            "element_id":        space.GlobalId,
+            "element_type":      "IfcSpace",
+            "element_name":      space.Name or "",
+            "element_name_long": long_name,
+            "check_status":      "pass" if passed else "fail",
+            "actual_value":      f"depth={round(depth, 3)} m",
+            "required_value":    f"<= {round(max_depth, 3)} m ({depth_factor} x {round(win_head_h, 3)} m head height)",
+            "comment":           f"window_head_height_m={round(win_head_h, 3)}",
+            "log":               None,
         })
 
-    non_compliant = [r["room"] for r in results if not r["pass"]]
-    return {
-        "results": results,
-        "rooms_checked": len(results),
-        "non_compliant_rooms": non_compliant,
-        "skipped_non_habitable": skipped,
-        "overall_pass": len(non_compliant) == 0,
+    n_fail = sum(1 for r in results if r["check_status"] == "fail")
+    n_blocked = sum(1 for r in results if r["check_status"] == "blocked")
+
+    if n_fail == 0 and n_blocked == 0:
+        summary = f"All {len(results)} habitable rooms pass room depth check (factor {depth_factor})."
+    elif n_fail == 0:
+        summary = f"All rooms with windows pass. {n_blocked} room(s) have no windows (blocked)."
+    else:
+        summary = (
+            f"{n_fail} room(s) exceed max depth. {n_blocked} room(s) have no windows. "
+            f"Factor: {depth_factor}x window head height."
+        )
+    if skipped:
+        summary += f" {len(skipped)} non-habitable space(s) skipped."
+
+    overall_result = {
+        "status":       "pass" if n_fail == 0 and n_blocked == 0 else "fail",
+        "summary":      summary,
+        "has_elements":  1 if results else 0,
     }
+
+    return results, overall_result

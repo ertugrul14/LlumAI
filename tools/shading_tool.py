@@ -1,6 +1,8 @@
 # --- Check Tool 4: Shading Device Presence ---
 from typing import List, Dict, Any, Optional
 import math
+import ifcopenshell
+import ifcopenshell.util.element as util
 
 def parse_orientations(orientations: str) -> set:
     """Parse comma-separated orientations to set of uppercase cardinal directions."""
@@ -22,7 +24,6 @@ def get_window_area_m2(window) -> Optional[float]:
     
     # Fallback: try property sets for Height/Width
     try:
-        import ifcopenshell.util.element as util
         psets = util.get_psets(window)
         for pvals in psets.values():
             if isinstance(pvals, dict):
@@ -179,59 +180,50 @@ def check_shading_presence(
         orientation = get_window_orientation(window, ifc, window_to_wall, north_offset)
         has_shading = detect_shading_for_window(window)
         # Compliance logic
-        compliance = "SKIP"
-        note = ""
-        if orientation in crit_set and (area_m2 is None or area_m2 > min_window_area):
+        is_critical = orientation in crit_set and (area_m2 is None or area_m2 > min_window_area)
+        if is_critical:
             if has_shading:
-                compliance = "PASS"
+                check_status = "pass"
             else:
-                compliance = "FAIL"
+                check_status = "fail"
                 unshaded_count += 1
         else:
-            compliance = "SKIP"
-            if area_m2 is None:
-                note = "Area unknown, not filtered by area."
+            check_status = "log"   # non-critical facade → informational
+
+        actual = "has shading" if has_shading else "no shading"
+        required = f"shading required ({critical_orientations} facade, > {min_window_area} m2)" if is_critical else None
+        area_str = f"{round(area_m2, 2)}" if area_m2 is not None else "unknown"
+
         results.append({
-            "name": name,
-            "id": global_id,
-            "area_m2": area_m2,
-            "orientation": orientation,
-            "has_shading": has_shading,
-            "compliance": compliance,
-            **({"note": note} if note else {})
+            "element_id":        global_id,
+            "element_type":      "IfcWindow",
+            "element_name":      name,
+            "element_name_long": None,
+            "check_status":      check_status,
+            "actual_value":      actual,
+            "required_value":    required,
+            "comment":           f"orientation={orientation}, area_m2={area_str}",
+            "log":               None if is_critical else f"SKIP: non-critical facade ({orientation})",
         })
-    return {
-        "compliant": (unshaded_count == 0),
-        "unshaded_count": unshaded_count,
-        "results": results
+
+    # Build overall_result
+    total = len(results)
+    n_checked = sum(1 for r in results if r["check_status"] != "log")
+    if unshaded_count == 0:
+        summary = (
+            f"All {n_checked} window(s) on critical facades ({critical_orientations}) "
+            f"have shading. {total} windows total."
+        )
+    else:
+        summary = (
+            f"{unshaded_count} window(s) on critical facades ({critical_orientations}) "
+            f"lack shading devices. {n_checked} checked, {total} windows total."
+        )
+
+    overall_result = {
+        "status":       "pass" if unshaded_count == 0 else "fail",
+        "summary":      summary,
+        "has_elements":  1 if results else 0,
     }
-"""IFC Compliance Checker — YOUR CODE GOES HERE"""
 
-import ifcopenshell
-
-
-# ─── Write your check functions below ──────────────────────────
-# Each function takes a model, returns a list of strings.
-# One string per element you checked.
-
-def check_door_width(model, min_width_mm=800):
-    """Check that all doors are at least 800mm wide."""
-    results = []
-    for door in model.by_type("IfcDoor"):
-        width_m = door.OverallWidth  # IFC stores in meters
-        width_mm = round(width_m * 1000) if width_m else None
-        if width_mm is None:
-            results.append(f"[???] {door.Name}: width unknown")
-        elif width_mm >= min_width_mm:
-            results.append(f"[PASS] {door.Name}: {width_mm} mm (min {min_width_mm} mm)")
-        else:
-            results.append(f"[FAIL] {door.Name}: {width_mm} mm (min {min_width_mm} mm)")
-    return results
-
-
-# def check_room_area(model):
-#     """Your next check..."""
-#     results = []
-#     for space in model.by_type("IfcSpace"):
-#         ...
-#     return results
+    return results, overall_result

@@ -165,42 +165,47 @@ def check_daylight_glazing_ratio(ifc_file_path, min_ratio=0.10, room_types=None)
             ratio = win_area / floor_area
 
         if win_area <= 0:
-            status = "No Windows"
+            check_status = "blocked"
         elif ratio < req_ratio:
-            status = "Fail"
+            check_status = "fail"
         else:
-            status = "Pass"
+            check_status = "pass"
 
         results.append({
-            "room": space.Name or "Unnamed",
-            "id": space.GlobalId,
-            "type": type_name,
-            "floor_area_m2": float(round(floor_area, 2)),
-            "window_area_m2": float(round(win_area, 2)),
-            "ratio": float(round(ratio, 4)),
-            "min_ratio_required": float(req_ratio),
-            "status": status,
-            "pass": bool(ratio >= req_ratio)
+            "element_id":        space.GlobalId,
+            "element_type":      "IfcSpace",
+            "element_name":      space.Name or "Unnamed",
+            "element_name_long": type_name or None,
+            "check_status":      check_status,
+            "actual_value":      f"{round(ratio * 100, 1)}%" if floor_area > 0 else None,
+            "required_value":    f">= {round(req_ratio * 100, 1)}%",
+            "comment":           f"floor_area_m2={round(floor_area, 2)}, window_area_m2={round(win_area, 2)}",
+            "log":               "No windows found" if win_area <= 0 else None,
         })
 
     # Summary
-    failed_rooms = [r["room"] for r in results if not r["pass"]]
-    overall_pass = bool(len(failed_rooms) == 0 and len(results) > 0)
+    n_fail = sum(1 for r in results if r["check_status"] == "fail")
+    n_blocked = sum(1 for r in results if r["check_status"] == "blocked")
+    all_pass = (n_fail == 0 and len(results) > 0)
 
-    return {
-        "compliant": overall_pass,
-        "results": results,
-        "non_compliant_rooms": failed_rooms,
-        "total_rooms_checked": len(results)
+    if all_pass and n_blocked == 0:
+        summary = f"All {len(results)} rooms meet daylight glazing ratio requirements."
+    elif all_pass:
+        summary = f"All rooms with windows pass. {n_blocked} room(s) have no windows (blocked)."
+    else:
+        summary = f"{n_fail} room(s) fail daylight glazing ratio. {n_blocked} room(s) have no windows."
+
+    overall_result = {
+        "status":       "pass" if n_fail == 0 and n_blocked == 0 else "fail",
+        "summary":      summary,
+        "has_elements":  1 if results else 0,
     }
+
+    return results, overall_result
 
 def analyze_daylight(ifc_file_path):
     """
     Standard entry point for the Daylight Compliance Tool.
     Hardcodes Catalan regulations (1/8 ratio) and returns JSON.
     """
-    # Hardcoded values per Catalan Decret d'habitabilitat
-    MIN_RATIO = 0.10 # Base, but logic handles 0.125 for habitable
-    ROOM_TYPES = None # All rooms, logic handles specific types inside
-    
-    return check_daylight_glazing_ratio(ifc_file_path, min_ratio=MIN_RATIO, room_types=ROOM_TYPES)
+    return check_daylight_glazing_ratio(ifc_file_path, min_ratio=0.10, room_types=None)
