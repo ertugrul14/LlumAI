@@ -76,11 +76,7 @@ def get_shgc_value(window):
                 return psets[pset_name][prop_name]
     return None
 
-def check_shgc(ifc_file_path, default_shgc=0.70, **kwargs):
-    try:
-        model = ifcopenshell.open(ifc_file_path)
-    except Exception as e:
-        return {"error": f"Could not open file: {e}"}
+def check_shgc(model, default_shgc=0.70, **kwargs):
 
     # CTE DB-HE 2019/2022 Parameters for Climate Zone C2 (Barcelona)
     h_sol_jul_c2 = {
@@ -104,7 +100,7 @@ def check_shgc(ifc_file_path, default_shgc=0.70, **kwargs):
         a_util += area
         
     if a_util <= 0:
-        return {"error": "Could not determine useful floor area (A_util) to calculate q_sol;jul."}
+        return []
 
     results = []
     total_heat_gain = 0.0
@@ -113,7 +109,7 @@ def check_shgc(ifc_file_path, default_shgc=0.70, **kwargs):
     
     windows = model.by_type("IfcWindow")
     if not windows:
-         return {"error": "No windows found in the model"}
+         return []
 
     for window in windows:
         # Geometry
@@ -174,36 +170,14 @@ def check_shgc(ifc_file_path, default_shgc=0.70, **kwargs):
             "log":               "SHGC not in IFC (default 0.7)" if is_missing else None,
         })
         
-    # Calculate q_sol;jul
+    # Calculate q_sol;jul and set building-level pass/fail on each row
     q_sol_jul = total_heat_gain / a_util
     passed = bool(q_sol_jul <= q_sol_jul_limit)
-    
-    if passed:
-        summary = (
-            f"Building passes solar heat gain check. "
-            f"q_sol_jul={round(q_sol_jul, 2)} <= {q_sol_jul_limit} kWh/m2·month. "
-            f"A_util={round(a_util, 2)} m2, {len(windows)} windows checked."
-        )
-    else:
-        summary = (
-            f"Building FAILS solar heat gain check. "
-            f"q_sol_jul={round(q_sol_jul, 2)} > {q_sol_jul_limit} kWh/m2·month. "
-            f"A_util={round(a_util, 2)} m2, {len(windows)} windows checked."
-        )
-    if missing_shgc_count:
-        summary += f" {missing_shgc_count} window(s) missing SHGC (default 0.7 used)."
+    building_status = "pass" if passed else "fail"
 
-    overall_result = {
-        "status":       "pass" if passed else "fail",
-        "summary":      summary,
-        "has_elements":  1 if results else 0,
-    }
+    for r in results:
+        if r["check_status"] == "log":
+            r["check_status"] = building_status
+        # keep "warning" rows as-is (SHGC was missing)
 
-    return results, overall_result
-
-def analyze_shgc(ifc_file_path):
-    """
-    Standard entry point for the SHGC Compliance Tool.
-    Hardcodes Climate Zone C2 values and returns JSON.
-    """
-    return check_shgc(ifc_file_path)
+    return results

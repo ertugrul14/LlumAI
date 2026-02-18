@@ -32,12 +32,7 @@ def get_quantity(element, quantity_name):
     except (ValueError, TypeError):
         return 0.0
 
-def check_daylight_glazing_ratio(ifc_file_path, min_ratio=0.10, room_types=None):
-    try:
-        model = ifcopenshell.open(ifc_file_path)
-    except Exception as e:
-        return {"error": f"Could not open file: {e}"}
-
+def check_daylight_glazing_ratio(model, min_ratio=0.10, room_types=None):
     # Normalize room_types to a list of lower-case strings for matching
     allowed_types = []
     if room_types:
@@ -195,17 +190,4 @@ def check_daylight_glazing_ratio(ifc_file_path, min_ratio=0.10, room_types=None)
     else:
         summary = f"{n_fail} room(s) fail daylight glazing ratio. {n_blocked} room(s) have no windows."
 
-    overall_result = {
-        "status":       "pass" if n_fail == 0 and n_blocked == 0 else "fail",
-        "summary":      summary,
-        "has_elements":  1 if results else 0,
-    }
-
-    return results, overall_result
-
-def analyze_daylight(ifc_file_path):
-    """
-    Standard entry point for the Daylight Compliance Tool.
-    Hardcodes Catalan regulations (1/8 ratio) and returns JSON.
-    """
-    return check_daylight_glazing_ratio(ifc_file_path, min_ratio=0.10, room_types=None)
+    return results

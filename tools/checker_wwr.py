@@ -153,17 +153,17 @@ def _window_wall_map(ifc_file):
 # Public tool function
 # ---------------------------------------------------------------------------
 
-def check_wwr(ifc_file_path: str):
+def check_wwr(model):
     """
     Compute Window-to-Wall Ratio per facade orientation and check compliance.
 
-    Returns
-    -------
-    tuple (element_results: list[dict], overall_result: dict)
-        element_results – one row per facade (N/S/E/W)
-        overall_result  – single summary dict with status / summary / has_elements
+    Args:
+        model: An ifcopenshell.file object (already opened).
+
+    Returns:
+        list[dict] — one dict per element (one per facade N/S/E/W).
     """
-    ifc_file = ifcopenshell.open(ifc_file_path)
+    ifc_file = model
 
     # -- Extract project_id --------------------------------------------------
     projects = ifc_file.by_type("IfcProject")
@@ -240,60 +240,4 @@ def check_wwr(ifc_file_path: str):
             "log":               None,
         })
 
-    # -- Build overall_result ------------------------------------------------
-    n_fail = len(fail_cards)
-    if all_pass:
-        summary = f"All 4 facades comply with {REGULATION}."
-    else:
-        summary = (
-            f"{n_fail} facade(s) exceed WWR limits ({', '.join(fail_cards)}). "
-            f"Regulation: {REGULATION}."
-        )
-
-    overall_result = {
-        "status":       "pass" if all_pass else "fail",
-        "summary":      summary,
-        "has_elements":  1 if element_results else 0,
-    }
-
-    return element_results, overall_result
-
-
-# ---------------------------------------------------------------------------
-# Gemini / orchestrator function-calling schema
-# ---------------------------------------------------------------------------
-
-TOOL_SCHEMA = {
-    "name": "check_wwr",
-    "description": (
-        "Compute the Window-to-Wall Ratio (WWR) for each façade orientation "
-        "(N, S, E, W) of an IFC building model and return a compliance verdict "
-        "based on CTE DB-HE 1 Zone C2 geometric thresholds "
-        "(N≤35%, S≤30%, E≤25%, W≤22%)."
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "ifc_file_path": {
-                "type": "string",
-                "description": "Absolute or relative path to the .ifc file to analyse.",
-            }
-        },
-        "required": ["ifc_file_path"],
-    },
-}
-
-
-# ---------------------------------------------------------------------------
-# Quick local test
-# ---------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    import sys
-
-    path = sys.argv[1] if len(sys.argv) > 1 else "../01_Duplex_Apartment.ifc"
-    elements, overall = check_wwr(path)
-    print("=== overall_result ===")
-    print(json.dumps(overall, indent=2))
-    print("\n=== element_results ===")
-    print(json.dumps(elements, indent=2))
+    return element_results
