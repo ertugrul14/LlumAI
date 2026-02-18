@@ -6,19 +6,171 @@ Regulation reference:
     ≈ 2.5 × the window head height.  Rooms deeper than this risk
     insufficient natural light at the back.
 
-Discovered by the orchestrator as ``check_room_depth``.
+Standalone module – no external local dependencies.
+Only requires: ifcopenshell (pip install ifcopenshell)
 """
 
+import math
 import ifcopenshell
 import ifcopenshell.util.element as element_util
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
-from .ifc_helpers import (
-    get_psets,
-    get_space_dimensions,
-    get_windows_in_space,
-    max_window_head_height,
-)
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Inline IFC helpers (self-contained – no ifc_helpers.py dependency)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _get_psets(element) -> Dict[str, Dict[str, Any]]:
+    """Return ``{pset_name: {prop: value}}`` for an IFC element."""
+    try:
+        return element_util.get_psets(element)
+    except Exception:
+        psets: Dict[str, Dict[str, Any]] = {}
+        for rel in getattr(element, "IsDefinedBy", []):
+            if rel.is_a("IfcRelDefinesByProperties"):
+                pset = rel.RelatingPropertyDefinition
+                if pset.is_a("IfcPropertySet"):
+                    props: Dict[str, Any] = {}
+                    for p in pset.HasProperties:
+                        if p.is_a("IfcPropertySingleValue") and p.NominalValue:
+                            props[p.Name] = p.NominalValue.wrappedValue
+                    psets[pset.Name] = props
+        return psets
+
+
+def _get_quantity_value(element, q_names: Union[str, List[str]]) -> Optional[float]:
+    """Get a quantity value from ``IfcElementQuantity`` sets."""
+    if isinstance(q_names, str):
+        q_names = [q_names]
+    for rel in getattr(element, "IsDefinedBy", []):
+        if rel.is_a("IfcRelDefinesByProperties"):
+            qset = rel.RelatingPropertyDefinition
+            if qset.is_a("IfcElementQuantity"):
+                for q in qset.Quantities:
+                    if q.Name in q_names:
+                        for attr in ("AreaValue", "LengthValue", "VolumeValue"):
+                            val = getattr(q, attr, None)
+                            if val is not None:
+                                return val
+    return None
+
+
+def _get_windows_in_space(space, ifc_file) -> list:
+    """Find windows associated with a space via ``IfcRelSpaceBoundary``."""
+    windows = []
+    for rel in ifc_file.by_type("IfcRelSpaceBoundary"):
+        if rel.RelatingSpace == space:
+            elem = rel.RelatedBuildingElement
+            if elem and elem.is_a("IfcWindow"):
+                windows.append(elem)
+    return windows
+
+
+def _get_space_dimensions(space) -> Dict[str, float]:
+    """Estimate room length, width, height, and depth from quantities / psets.
+
+    Tries direct Length/Width quantities first.  When those are absent (common
+    in Revit-exported IFC), falls back to estimating dimensions from
+    ``Area`` + ``Perimeter`` by solving the rectangle formula:
+
+        L + W = P/2,  L * W = A  →  quadratic
+    """
+    length = _get_quantity_value(space, ["Length"])
+    width = _get_quantity_value(space, ["Width"])
+    height = _get_quantity_value(space, ["Height", "ClearHeight", "FinishCeilingHeight"])
+    area: Optional[float] = None
+    perimeter: Optional[float] = None
+
+    psets = _get_psets(space)
+    for pn, pv in psets.items():
+        if isinstance(pv, dict):
+            if not length:
+                length = pv.get("Length", 0) or 0
+            if not width:
+                width = pv.get("Width", 0) or 0
+            if not height:
+                height = (
+                    pv.get("Height", 0)
+                    or pv.get("Unbounded Height", 0)
+                    or pv.get("UnboundedHeight", 0)
+                    or pv.get("ClearHeight", 0)
+                ) or 0
+            if not area:
+                area = pv.get("Area", 0) or pv.get("NetFloorArea", 0) or 0
+            if not perimeter:
+                perimeter = pv.get("Perimeter", 0) or 0
+
+    # Also try IfcElementQuantity for area/perimeter
+    if not area:
+        area = _get_quantity_value(space, ["NetFloorArea", "GrossFloorArea"]) or 0
+    if not perimeter:
+        perimeter = _get_quantity_value(space, ["GrossPerimeter", "Perimeter"]) or 0
+
+    # Fallback: estimate length/width from Area + Perimeter (rectangle model)
+    if (not length or not width) and area and perimeter:
+        half_p = perimeter / 2
+        disc = half_p ** 2 - 4 * area
+        if disc >= 0:
+            sqrt_disc = math.sqrt(disc)
+            length = (half_p + sqrt_disc) / 2
+            width = (half_p - sqrt_disc) / 2
+
+    return {
+        "length": length or 0,
+        "width": width or 0,
+        "height": height or 0,
+        "area": area or 0,
+        "perimeter": perimeter or 0,
+        "depth": max(length or 0, width or 0),
+    }
+
+
+def _read_window_head_height(window) -> float:
+    """Best-effort head-height for a single window."""
+    psets = _get_psets(window)
+    sill: Optional[float] = None
+    head: Optional[float] = None
+
+    for pn, pv in psets.items():
+        if not isinstance(pv, dict):
+            continue
+        # Direct head height (Revit "Head Height")
+        for key in ("Head Height", "HeadHeight"):
+            val = pv.get(key)
+            if isinstance(val, (int, float)) and val > 0:
+                head = val
+        # Sill height
+        for key in ("Sill Height", "SillHeight"):
+            val = pv.get(key)
+            if isinstance(val, (int, float)) and val >= 0:
+                sill = val
+
+    # 1. Prefer explicit head height
+    if head is not None and head > 0:
+        return head
+    # 2. Sill + window height
+    h = window.OverallHeight or 0
+    if sill is not None:
+        return sill + h
+    # 3. Fallback: assume sill ≈ 0.9 m
+    return 0.9 + h if h > 0 else 0
+
+
+def _max_window_head_height(windows) -> float:
+    """Get the maximum window head height above the floor."""
+    if not windows:
+        return 0
+    max_h = 0.0
+    for w in windows:
+        head_h = _read_window_head_height(w)
+        if head_h and head_h > max_h:
+            max_h = head_h
+    return max_h
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Tool schema & main check function
+# ═══════════════════════════════════════════════════════════════════════════
 
 # Spaces whose names match these keywords are skipped by default because
 # the daylight-penetration rule applies to *habitable* rooms only.
@@ -105,11 +257,11 @@ def check_room_depth(
                 skipped.append(long_name)
                 continue
 
-        dims = get_space_dimensions(space)
+        dims = _get_space_dimensions(space)
         depth = dims["depth"]
 
-        space_windows = get_windows_in_space(space, ifc_file)
-        win_head_h = max_window_head_height(space_windows)
+        space_windows = _get_windows_in_space(space, ifc_file)
+        win_head_h = _max_window_head_height(space_windows)
 
         if win_head_h <= 0:
             results.append({
