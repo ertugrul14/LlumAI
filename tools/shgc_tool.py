@@ -161,7 +161,7 @@ def check_shgc(ifc_file_path, default_shgc=0.70, **kwargs):
             "id": window.GlobalId,
             "orientation": orientation,
             "shgc": float(round(shgc, 3)),
-            "area": float(round(w_area, 2)),
+            "area_m2": float(round(w_area, 2)),
             "contribution": float(round(contribution, 2)),
             "is_missing": is_missing
         })
@@ -175,8 +175,8 @@ def check_shgc(ifc_file_path, default_shgc=0.70, **kwargs):
         "q_sol_jul": float(round(q_sol_jul, 2)),
         "limit": float(q_sol_jul_limit),
         "results": results,
-        "a_util": float(round(a_util, 2)),
-        "total_window_area": float(round(total_window_area, 2)),
+        "a_util_m2": float(round(a_util, 2)),
+        "total_window_area_m2": float(round(total_window_area, 2)),
         "missing_shgc_count": missing_shgc_count,
         "total_windows": len(windows)
     }
