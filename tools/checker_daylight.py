@@ -3,9 +3,21 @@ import ifcopenshell.util.element as util
 import ifcopenshell.util.placement as placement
 import math
 
+def _extract_quantity_value(q):
+    """Extract the numeric value from any IfcPhysicalQuantity subtype."""
+    for attr in ("LengthValue", "AreaValue", "VolumeValue",
+                 "CountValue", "WeightValue", "TimeValue",
+                 "NominalValue"):
+        v = getattr(q, attr, None)
+        if v is not None:
+            return v
+    return None
+
+
 def get_quantity(element, quantity_name):
     """
     Tries to retrieve a quantity from various property sets.
+    Works across IFC2x3, IFC4, and IFC4x3.
     """
     val = 0.0
     # 1. Try IfcElementQuantity (common in IFC4)
@@ -15,9 +27,11 @@ def get_quantity(element, quantity_name):
             if props.is_a("IfcElementQuantity"):
                 for q in props.Quantities:
                     if q.Name == quantity_name:
-                        val = q.NominalValue
+                        v = _extract_quantity_value(q)
+                        if v is not None:
+                            val = v
                         break
-    
+
     # 2. Try standard property sets via util.get_psets (handles BaseQuantities, etc.)
     if val == 0.0:
         psets = util.get_psets(element)
